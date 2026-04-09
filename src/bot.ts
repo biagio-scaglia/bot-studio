@@ -53,7 +53,7 @@ function saveHistory(map: Map<number, { role: string, content: string }[]>) {
 async function sendDecoratedMessage(ctx: Context, aiResponse: string) {
     const headerUrl = `[\u200B](https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=800&auto=format&fit=crop)`;
     const header = `${headerUrl}🐉 *il biagigio*\n➖➖➖➖➖➖➖➖➖➖➖➖\n`;
-    const footer = `\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 *Risorse:* [Ollama](https://ollama.com/) | [Telegraf](https://telegraf.js.org/) | [Progetto Bot](https://github.com/biagio-scaglia/bot-studio)`;
+    const footer = `\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 *Risorse pratiche:* [Stack Overflow](https://stackoverflow.com/) | [MDN Web Docs](https://developer.mozilla.org/) | [Repo Bot](https://github.com/biagio-scaglia/bot-studio)`;
     
     const fullText = header + aiResponse + footer;
     const MAX_LENGTH = 4000;
@@ -62,7 +62,7 @@ async function sendDecoratedMessage(ctx: Context, aiResponse: string) {
         try { 
             await ctx.reply(fullText, { parse_mode: 'Markdown' }); 
         } catch { 
-            await ctx.reply(`🐉 il biagigio\n➖➖➖➖➖➖➖➖➖➖➖➖\n${aiResponse}\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 Risorse: https://ollama.com/ | https://github.com/biagio-scaglia/bot-studio`); 
+            await ctx.reply(`🐉 il biagigio\n➖➖➖➖➖➖➖➖➖➖➖➖\n${aiResponse}\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 Risorse pratiche: https://stackoverflow.com/ | https://developer.mozilla.org/ | https://github.com/biagio-scaglia/bot-studio`); 
         }
         return;
     }
