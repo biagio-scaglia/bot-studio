@@ -108,6 +108,20 @@ export function setupBot(botToken: string, modelName: string) {
         
         const filePath = path.resolve(process.cwd(), text);
         try {
+            if (!fs.existsSync(filePath)) {
+                ctx.reply(`⚠️ Il file indicato non esiste: ${text}`);
+                return;
+            }
+            const stat = fs.statSync(filePath);
+            if (stat.isDirectory()) {
+                ctx.reply(`📂 Il percorso indica una cartella, specifica l'indirizzo di un file.`);
+                return;
+            }
+            if (stat.size > 100000) { // Limite di 100KB per evitare un contesto eccessivo e crash
+                ctx.reply(`⛔ Il file è troppo grande per essere elaborato e inserito nel contesto.`);
+                return;
+            }
+
             const content = fs.readFileSync(filePath, 'utf-8');
             const contextId = ctx.chat?.id || ctx.from?.id || 1;
             let history = contextMap.get(contextId) || [];
@@ -121,7 +135,7 @@ export function setupBot(botToken: string, modelName: string) {
             
             contextMap.set(contextId, history);
             saveHistory(contextMap);
-            ctx.reply(`File *${text}* caricato in memoria!`, { parse_mode: 'Markdown' });
+            ctx.reply(`File *${text}* caricato in memoria! (Aggiunte ${content.length} battute al contesto)`, { parse_mode: 'Markdown' });
         } catch (e: any) {
              ctx.reply(`Impossibile leggere il file: ${e.message}`);
         }
@@ -150,8 +164,9 @@ export function setupBot(botToken: string, modelName: string) {
 
         history.push({ role: 'user', content: userMessage });
 
+        let typingInterval: NodeJS.Timeout | null = null;
         try {
-            const typingInterval = setInterval(() => {
+            typingInterval = setInterval(() => {
                 ctx.sendChatAction('typing').catch(() => { });
             }, 3500);
 
@@ -161,12 +176,13 @@ export function setupBot(botToken: string, modelName: string) {
             });
 
             clearInterval(typingInterval);
+            typingInterval = null;
 
             const aiResponse = response.message.content;
             history.push({ role: 'assistant', content: aiResponse });
 
             if (history.length > 30) {
-                history.splice(1, 2);
+                history.splice(1, 2); // Rimuoviamo i messaggi vecchi mantenendo il SYSTEM_PROMPT
             }
             contextMap.set(contextId, history);
             saveHistory(contextMap);
@@ -174,6 +190,7 @@ export function setupBot(botToken: string, modelName: string) {
             await sendDecoratedMessage(ctx, aiResponse);
             
         } catch (error: any) {
+            if (typingInterval) clearInterval(typingInterval);
             let errorMessage = "❌ C'è stato un errore nel comunicare con Llama 3.";
             if (error.cause?.code === 'ECONNREFUSED') {
                 errorMessage += "\n\nSembra che Llama non sia in esecuzione.";
