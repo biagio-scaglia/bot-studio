@@ -1,6 +1,8 @@
 import { Telegraf, Context } from 'telegraf';
 import { message } from 'telegraf/filters';
 import ollama from 'ollama';
+import fs from 'fs';
+import path from 'path';
 
 const SYSTEM_PROMPT = `
 Sei un programmatore senior con esperienza reale in produzione. Non sei un assistente, sei uno sviluppatore che risponde a un altro sviluppatore.
@@ -33,9 +35,55 @@ MENTALITÀ:
 - Preferisci soluzioni semplici ma solide rispetto a soluzioni “fighe” ma fragili.
 `;
 
+const HISTORY_FILE = path.join(process.cwd(), 'history.json');
+
+function loadHistory(): Map<number, { role: string, content: string }[]> {
+    if (fs.existsSync(HISTORY_FILE)) {
+        try {
+            return new Map(JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8')));
+        } catch (e) {}
+    }
+    return new Map<number, { role: string, content: string }[]>();
+}
+
+function saveHistory(map: Map<number, { role: string, content: string }[]>) {
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(Array.from(map.entries())));
+}
+
+async function sendDecoratedMessage(ctx: Context, aiResponse: string) {
+    const headerUrl = `[\u200B](https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=800&auto=format&fit=crop)`;
+    const header = `${headerUrl}🤖 *Ollama Coder Assistant*\n➖➖➖➖➖➖➖➖➖➖➖➖\n`;
+    const footer = `\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 *Risorse:* [Ollama](https://ollama.com/) | [Telegraf](https://telegraf.js.org/) | [Progetto Bot](https://github.com/biagio-scaglia/bot-studio)`;
+    
+    const fullText = header + aiResponse + footer;
+    const MAX_LENGTH = 4000;
+
+    if (fullText.length <= MAX_LENGTH) {
+        try { 
+            await ctx.reply(fullText, { parse_mode: 'Markdown' }); 
+        } catch { 
+            await ctx.reply(`🤖 Ollama Coder Assistant\n➖➖➖➖➖➖➖➖➖➖➖➖\n${aiResponse}\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 Risorse: https://ollama.com/ | https://github.com/biagio-scaglia/bot-studio`); 
+        }
+        return;
+    }
+
+    const chunks = aiResponse.match(/[\s\S]{1,4000}/g) || [];
+    for (let i = 0; i < chunks.length; i++) {
+        let chunkText = chunks[i];
+        if (i === 0) chunkText = header + chunkText;
+        if (i === chunks.length - 1) chunkText = chunkText + footer;
+        
+        try { 
+            await ctx.reply(chunkText, { parse_mode: 'Markdown' }); 
+        } catch { 
+            await ctx.reply(chunkText); 
+        }
+    }
+}
+
 export function setupBot(botToken: string, modelName: string) {
     const bot = new Telegraf(botToken);
-    const contextMap = new Map<number, { role: string, content: string }[]>();
+    const contextMap = loadHistory();
 
     bot.start((ctx) => {
         const userId = ctx.from.id;
@@ -45,29 +93,54 @@ export function setupBot(botToken: string, modelName: string) {
     bot.command('reset', (ctx) => {
         const userId = ctx.from.id;
         contextMap.delete(userId);
+        saveHistory(contextMap);
         ctx.reply("Memoria della conversazione resettata. Partiamo da zero!");
+    });
+
+    bot.command('read', (ctx) => {
+        if (!ctx.message || !('text' in ctx.message)) return;
+        const text = ctx.message.text.replace('/read', '').trim();
+        if (!text) {
+             ctx.reply('Specifica il percorso del file. Esempio: /read src/index.ts');
+             return;
+        }
+        
+        const filePath = path.resolve(process.cwd(), text);
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            const contextId = ctx.chat?.id || ctx.from?.id || 1;
+            let history = contextMap.get(contextId) || [];
+            
+            if (history.length === 0) {
+                history.push({ role: 'system', content: SYSTEM_PROMPT.trim() });
+            }
+            
+            history.push({ role: 'user', content: `Ecco il file ${text}:\n\n\`\`\`\n${content}\n\`\`\`` });
+            history.push({ role: 'assistant', content: `Ho letto correttamente ${text}.` });
+            
+            contextMap.set(contextId, history);
+            saveHistory(contextMap);
+            ctx.reply(`File *${text}* caricato in memoria!`, { parse_mode: 'Markdown' });
+        } catch (e: any) {
+             ctx.reply(`Impossibile leggere il file: ${e.message}`);
+        }
     });
 
     bot.on(['message', 'channel_post'], async (ctx: Context) => {
         let userMessage = '';
-        if (ctx.message && 'text' in ctx.message) {
+        if (ctx.message && 'text' in ctx.message && !ctx.message.text.startsWith('/')) {
             userMessage = ctx.message.text;
-        } else if (ctx.channelPost && 'text' in ctx.channelPost) {
+        } else if (ctx.channelPost && 'text' in ctx.channelPost && !ctx.channelPost.text.startsWith('/')) {
             userMessage = ctx.channelPost.text;
         }
 
         if (!userMessage) return;
 
         const contextId = ctx.chat?.id || ctx.from?.id || 1;
-
-        console.log(`\n📥 [Messaggio Ricevuto] Da: ${contextId} | Testo captato: "${userMessage}"`);
-        console.log(`⏳ Sto generando la risposta con Ollama...`);
-
+        
         try {
             await ctx.sendChatAction('typing');
-        } catch (e) {
-            console.error("Impossibile inviare la chat action", e);
-        }
+        } catch (e) {}
 
         let history = contextMap.get(contextId) || [];
         if (history.length === 0) {
@@ -89,33 +162,22 @@ export function setupBot(botToken: string, modelName: string) {
             clearInterval(typingInterval);
 
             const aiResponse = response.message.content;
-            console.log(`📤 [Risposta Pronta] Lunga ${aiResponse.length} caratteri. Invio su Telegram...`);
             history.push({ role: 'assistant', content: aiResponse });
 
-            const decoratedResponse = `[\u200B](https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=800&auto=format&fit=crop)🤖 *Ollama Coder Assistant*\n➖➖➖➖➖➖➖➖➖➖➖➖\n${aiResponse}\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 *Risorse:* [Ollama](https://ollama.com/) | [Telegraf](https://telegraf.js.org/) | [Progetto Bot](https://github.com/biagio-scaglia/bot-studio)`;
-            
-            if (history.length > 20) {
+            if (history.length > 30) {
                 history.splice(1, 2);
             }
             contextMap.set(contextId, history);
+            saveHistory(contextMap);
 
-            try {
-                await ctx.reply(decoratedResponse, { parse_mode: 'Markdown' });
-            } catch (mdError) {
-                console.log("⚠️ Errore di formattazione Markdown da Telegram, invio come testo normale:", mdError);
-                await ctx.reply(`🤖 Ollama Coder Assistant\n➖➖➖➖➖➖➖➖➖➖➖➖\n${aiResponse}\n➖➖➖➖➖➖➖➖➖➖➖➖\n🔗 Risorse: https://ollama.com/ | https://github.com/biagio-scaglia/bot-studio`);
-            }
+            await sendDecoratedMessage(ctx, aiResponse);
+            
         } catch (error: any) {
-            console.error("Errore Ollama:", error);
-
             let errorMessage = "❌ C'è stato un errore nel comunicare con Llama 3.";
             if (error.cause?.code === 'ECONNREFUSED') {
-                errorMessage += "\n\nSembra che **Ollama non sia in esecuzione** nel tuo PC. Assicurati di avviarlo e riprova!";
-            } else if (error.status_code === 404) {
-                errorMessage += `\n\nModello '${modelName}' non trovato. Prova ad aprire il terminale ed eseguire \`ollama run ${modelName}\`.`;
+                errorMessage += "\n\nSembra che Llama non sia in esecuzione.";
             }
-
-            await ctx.reply(errorMessage, { parse_mode: 'Markdown' });
+            await ctx.reply(errorMessage);
             history.pop();
         }
     });
